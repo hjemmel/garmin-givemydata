@@ -672,7 +672,8 @@ def garmin_activity_detail(activity_id: int = 0, last: bool = False) -> str:
                       aerobic_training_effect, anaerobic_training_effect,
                       vo2max_value, ROUND(avg_cadence, 0) AS avg_cadence,
                       ROUND(avg_respiration, 1) AS avg_respiration,
-                      location_name
+                      location_name, direct_workout_feel AS workout_feel,
+                      direct_workout_rpe AS workout_rpe
                FROM activity WHERE activity_id = ?""",
             [activity_id],
         )

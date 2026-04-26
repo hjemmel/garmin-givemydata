@@ -297,6 +297,8 @@ CREATE TABLE IF NOT EXISTS activity (
     max_temperature                     REAL,
     manufacturer                        TEXT,
     device_id                           INTEGER,
+    direct_workout_feel                 INTEGER,
+    direct_workout_rpe                  INTEGER,
     raw_json                            TEXT
 );
 
@@ -1090,7 +1092,8 @@ def upsert_activity(conn: sqlite3.Connection, record: dict) -> None:
             vigorous_intensity_minutes, start_latitude, start_longitude,
             end_latitude, end_longitude, location_name, lap_count,
             water_estimated, min_temperature, max_temperature,
-            manufacturer, device_id, raw_json
+            manufacturer, device_id, direct_workout_feel, direct_workout_rpe,
+            raw_json
         ) VALUES (
             :activity_id, :activity_name, :activity_type, :activity_type_id,
             :parent_type_id, :start_time_local, :start_time_gmt,
@@ -1104,7 +1107,10 @@ def upsert_activity(conn: sqlite3.Connection, record: dict) -> None:
             :vigorous_intensity_minutes, :start_latitude, :start_longitude,
             :end_latitude, :end_longitude, :location_name, :lap_count,
             :water_estimated, :min_temperature, :max_temperature,
-            :manufacturer, :device_id, :raw_json
+            :manufacturer, :device_id,
+            COALESCE(:direct_workout_feel, (SELECT direct_workout_feel FROM activity WHERE activity_id = :activity_id)),
+            COALESCE(:direct_workout_rpe, (SELECT direct_workout_rpe FROM activity WHERE activity_id = :activity_id)),
+            :raw_json
         )
         """,
         {
@@ -1154,6 +1160,8 @@ def upsert_activity(conn: sqlite3.Connection, record: dict) -> None:
             "max_temperature": record.get("maxTemperature"),
             "manufacturer": record.get("manufacturer"),
             "device_id": record.get("deviceId"),
+            "direct_workout_feel": record.get("directWorkoutFeel"),
+            "direct_workout_rpe": record.get("directWorkoutRpe"),
             "raw_json": json.dumps(record),
         },
     )
@@ -1658,6 +1666,8 @@ def upsert_activity_exercise_sets(conn: sqlite3.Connection, activity_id: int, da
     sets = data if isinstance(data, list) else data.get("exerciseSets") or [data]
     count = 0
     for i, s in enumerate(sets):
+        exercises = s.get("exercises") or []
+        primary = exercises[0] if exercises else {}
         conn.execute(
             """INSERT OR REPLACE INTO activity_exercise_sets
                (activity_id, set_number, exercise_name, exercise_category,
@@ -1666,8 +1676,8 @@ def upsert_activity_exercise_sets(conn: sqlite3.Connection, activity_id: int, da
             (
                 activity_id,
                 i + 1,
-                s.get("exerciseName"),
-                s.get("exerciseCategory"),
+                s.get("exerciseName") or primary.get("name"),
+                s.get("exerciseCategory") or primary.get("category"),
                 s.get("repetitionCount") or s.get("reps"),
                 s.get("weight"),
                 s.get("duration"),
@@ -2388,15 +2398,22 @@ def save_to_db(conn: sqlite3.Connection, endpoint_name: str, data, cal_date: str
         elif name == "activity_details":
             # Detail endpoint has a different structure (summaryDTO, activityTypeDTO)
             # than the list endpoint. Don't overwrite the activity table — it would
-            # null out fields. Just update raw_json for activities that already exist.
+            # null out fields. Just update raw_json and feel/rpe for activities that already exist.
             for rec in records:
                 aid = rec.get("activityId")
                 if aid:
-                    import json as _json
+                    # Feel/RPE might be at top level or in summaryDTO
+                    summary = rec.get("summaryDTO") or {}
+                    feel = rec.get("directWorkoutFeel") or summary.get("directWorkoutFeel")
+                    rpe = rec.get("directWorkoutRpe") or summary.get("directWorkoutRpe")
 
                     conn.execute(
-                        "UPDATE activity SET raw_json = ? WHERE activity_id = ?",
-                        (_json.dumps(rec), aid),
+                        """UPDATE activity
+                           SET raw_json = ?,
+                               direct_workout_feel = COALESCE(?, direct_workout_feel),
+                               direct_workout_rpe = COALESCE(?, direct_workout_rpe)
+                           WHERE activity_id = ?""",
+                        (json.dumps(rec), feel, rpe, aid),
                     )
                     # Extract running dynamics if present
                     upsert_running_dynamics(conn, aid, rec)
